@@ -1,0 +1,13 @@
+QwenImage (qwen_image_5e8f3a21)
+Copyright (c) 2026 AIReliable Team. All rights reserved.
+
+License: AIReliable Engine License 1.0（source-available，非 OSI 开源）
+Engine repository: 待发布
+Engine version: 0.2.0
+
+本引擎可能使用或按需下载以下第三方组件，其版权与许可归各自作者所有：
+
+- Qwen-Image-2512 | License: Apache-2.0
+- Qwen-Image-Edit-2509 | License: Apache-2.0
+- Qwen-Image-GGUF | License: Apache-2.0
+- Qwen2.5-VL | License: Apache-2.0

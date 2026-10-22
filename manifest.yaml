@@ -1,0 +1,607 @@
+# ============================================================
+# Qwen-Image 图像引擎 manifest（v0.2.0，FLUX Kontext → Qwen 迁移）
+# ------------------------------------------------------------
+# 架构（ANALYSIS-TASKS/FLUX_KONTEXT_TO_QWEN_MIGRATION_ANALYSIS.md v1.3）：
+#   - paradigm: integrated（全自定义模式，继承 CustomEngine）
+#   - 引擎 ID/目录已由 FLUX 时代注册完整改名（qwen_image_5e8f3a21），端口 7007 不变
+#   - 双 transformer：t2i 用 Qwen-Image-2512，edit/i2i 用
+#     Qwen-Image-Edit-2509（EditPlus 管线，原生多图参考）
+#   - 仅 GGUF Q8 单档（决策 D3，48GB Turing 卡适配）
+#   - 共享组件（Qwen2.5-VL-7B/VAE/tokenizer/processor/scheduler）常驻单份
+#
+# 模型文件设计要点：
+#   1. 全部单文件条目（无 marker）：逐文件声明 + ModelScope 直链
+#      （国内快）+ hf-mirror 兜底，平台下载器按文件粒度断点续传
+#   2. transformer 为 unsloth GGUF 单文件（Q8_0，from_single_file 加载，
+#      内置 configs/qwen_transformer/config.json 离线加载）
+#   3. 文本编码器用官方 Qwen/Qwen-Image-2512 bf16 4 shards（16.6GB，
+#      T1.3 决策：ComfyUI fp8_scaled 单文件的 scale 不被 transformers 应用）
+#   4. 共享组件在 2509 与 2512 仓 SHA256 完全一致 → 只下一份
+#      （text_encoder/vae/tokenizer/scheduler 取 2512 仓，processor 取 2509 仓）
+#   5. 小配置文件不填 format 字段（format=json 会被 ModelFileChecker 过滤，
+#      导致无就绪检测、无下载入口）
+#
+# 模型目录结构（与 pipeline_builder.py 布局常量一致）：
+#   models/image/qwen-image/
+#     ├── transformers/
+#     │   ├── t2i/qwen-image-2512-Q8_0.gguf             # t2i 槽（20.3GB）
+#     │   └── edit/qwen-image-edit-2509-Q8_0.gguf       # edit/i2i 槽（20.3GB）
+#     ├── text_encoder/                                  # Qwen2.5-VL-7B bf16
+#     │   ├── config.json / generation_config.json / model.safetensors.index.json
+#     │   └── model-0000{1..4}-of-00004.safetensors      # 共 16.6GB
+#     ├── vae/
+#     │   ├── config.json
+#     │   └── diffusion_pytorch_model.safetensors        # 254MB
+#     ├── tokenizers/                                    # Qwen2Tokenizer（t2i 管线）
+#     ├── processor/                                     # Qwen2VLProcessor（EditPlus 管线）
+#     ├── scheduler/scheduler_config.json
+#     └── loras/                                         # 用户 LoRA（Qwen 生态）
+# ============================================================
+
+# ===== v0.1 必需字段 =====
+engine_id: qwen_image_5e8f3a21
+engine_name: QwenImage
+engine_version: 0.2.0
+aireliable_compat: ">=0.0.16"
+uv_env_name: image-qwen-image
+export_mode: source
+
+# ===== v0.1 可选字段 =====
+description: "Qwen-Image 图像引擎（integrated 全自定义范式）：文生图（Qwen-Image-2512，中文字符渲染强项）+ 指令式图像编辑（Qwen-Image-Edit-2509，含视角控制）+ 多图参考图生图（EditPlus 原生多图，2-3 张跨图语义交互）；GGUF Q8 单档（48GB Turing 卡适配）；多 LoRA 叠加；四区模块化 WebUI"
+
+# ===== v0.2 新增字段 =====
+# engine_uid 格式约束：author/family/name 仅小写字母/数字/下划线（manifest_schema 校验）
+engine_uid: aireliable://aijiangge/image/qwen_image
+paradigm: integrated
+sdk_version: ">=0.3.0"
+
+# 作者信息（v0.2.7：author = 创建引擎的作者）
+author:
+  name: AI剑歌
+
+# 第三方开源引用（v0.2.7）
+third_party_references:
+  - name: Qwen-Image-2512
+    author: Qwen Team
+    github: https://github.com/QwenLM/Qwen-Image
+    website: https://huggingface.co/Qwen/Qwen-Image-2512
+    license: Apache-2.0
+    description: 文生图（t2i）模式的核心 transformer 与共享组件（VL 编码器/VAE/tokenizer/scheduler）来自 Qwen 团队的 Qwen-Image-2512 模型
+  - name: Qwen-Image-Edit-2509
+    author: Qwen Team
+    github: https://github.com/QwenLM/Qwen-Image
+    website: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
+    license: Apache-2.0
+    description: 指令式编辑（edit）与多图参考图生图（i2i）模式的核心 transformer 及 EditPlus 管线 processor 组件来自 Qwen-Image-Edit-2509 模型
+  - name: Qwen-Image-GGUF
+    author: Unsloth
+    github: https://huggingface.co/unsloth
+    website: https://huggingface.co/unsloth/Qwen-Image-2512-GGUF
+    license: Apache-2.0
+    description: 双槽 transformer 的 GGUF Q8_0 量化版来自 unsloth 的 Qwen-Image-GGUF 仓库（qwen-image-2512-Q8_0.gguf 与 qwen-image-edit-2509-Q8_0.gguf）
+  - name: Qwen2.5-VL
+    author: Qwen Team
+    github: https://github.com/QwenLM/Qwen2.5-VL
+    website: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct
+    license: Apache-2.0
+    description: 文本/视觉编码器基于 Qwen2.5-VL-7B 架构（QwenImagePipeline/EditPlus 管线的 text_encoder 组件）
+
+# 来源信息
+source:
+  type: github
+  github_repo: QwenLM/Qwen-Image
+  branch: main
+
+# 升级信息
+upgrade:
+  check_url: https://api.github.com/repos/QwenLM/Qwen-Image/releases/latest
+  auto_check: false
+
+# 节点包依赖（integrated 范式不依赖节点包）
+node_packages: []
+
+# ============================================================
+# 引擎环境配置（EngineEnvManager 读取）
+# 本机实测：Quadro RTX 8000 48GB（Turing sm_75），torch 2.11.0+cu128
+# ============================================================
+env_config:
+  requires_torch: true
+  torch_version_constraint: '>=2.5.0'
+  default_cuda_version: cu128
+  supported_cuda_versions:
+    - cu121
+    - cu124
+    - cu126
+    - cu128
+  requires_python: '>=3.10,<3.13'
+  notes: 'Qwen-Image 基于 torch + diffusers 0.40 GPU 推理；Turing 无 bf16 ALU → fp16 计算；48GB 显存 Q8 单槽 21.8GB 单驻热切换 + VL 动态放置（GPU/CPU）'
+  recommended_versions:
+    torch: '2.11.0'
+    torchvision: null
+    torchaudio: null
+    reason: 'Qwen 引擎测试通过的稳定版本组合（torch 2.11.0+cu128，与 video-minimax-h3 共用 uv 缓存）'
+  cpu_offload:
+    supported: true
+    default_level: auto
+    levels:
+      L0:
+        name: "全 GPU"
+        description: "共享组件 + 单槽 Q8 transformer（21.8GB）+ VL（16.6GB，剩余显存足够时）常驻 GPU"
+        min_vram_gb: 40
+      L1:
+        name: "VL 编码器驻 CPU"
+        description: "VL 编码器（Qwen2.5-VL-7B）驻 CPU 内存，transformer+VAE 常驻 GPU（显存紧张兜底，编码每次 +几秒）"
+        min_vram_gb: 24
+
+# ============================================================
+# models 块
+# ============================================================
+models:
+  # ===== 模型目录布局 =====
+  model_layout:
+    base: image/qwen-image/
+    lora: image/qwen-image/loras/
+
+  # ===== 默认 variant（Qwen 迁移后仅 GGUF Q8 单档）=====
+  # 用户未显式指定时 auto-load 用默认档
+  default_variant: Qwen/Image-GGUF-Q8
+
+  # ===== 模型变体列表（单档，三模式共用）=====
+  # variant = "一档精度的完整可运行集"（共享组件 + t2i transformer + edit transformer）
+  # 三模式对应管线：t2i → QwenImagePipeline(2512)；edit → QwenImageEditPlusPipeline
+  #                (单图指令编辑+视角控制)；i2i → EditPlus(原生多图列表，上限 3 张)
+  variants:
+    # ----- 1. GGUF Q8 档（唯一档，默认）-----
+    - name: Qwen/Image-GGUF-Q8
+      alias: qwen-image-q8
+      base_model: Qwen-Image-Edit-2509/Qwen-Image-2512
+      precision: q8_0
+      loader: diffusers
+      vram_required: 40GB
+      path: image/qwen-image/transformers/edit/qwen-image-edit-2509-Q8_0.gguf
+      model_file_ids:
+        # 共享组件（24 个，常驻单份）
+        - qwen-text-encoder-shard1
+        - qwen-text-encoder-shard2
+        - qwen-text-encoder-shard3
+        - qwen-text-encoder-shard4
+        - qwen-text-encoder-config
+        - qwen-text-encoder-index
+        - qwen-text-encoder-generation-config
+        - qwen-vae-weights
+        - qwen-vae-config
+        - qwen-tokenizer-vocab
+        - qwen-tokenizer-merges
+        - qwen-tokenizer-config
+        - qwen-tokenizer-special
+        - qwen-tokenizer-added
+        - qwen-tokenizer-chat-template
+        - qwen-processor-preprocessor-config
+        - qwen-processor-video-config
+        - qwen-processor-tokenizer-json
+        - qwen-processor-chat-template
+        - qwen-processor-added
+        - qwen-processor-merges
+        - qwen-processor-special
+        - qwen-processor-config
+        - qwen-scheduler-config
+        # 本档 transformer（2 个：t2i 槽 + edit 槽）
+        - qwen-t2i-transformer-gguf-q8
+        - qwen-edit-transformer-gguf-q8
+      uv_env: envs/image-qwen-image
+      default_steps: 28
+      default_guidance: 4.0
+
+  # ===== 模型文件清单（26 个：2 GGUF transformer + 4 VL shard + 3 VL 配置
+  # + 2 VAE + 6 tokenizer + 8 processor + 1 scheduler）=====
+  # 下载源策略（T1.3 实测，2026-08-25）：
+  #   - transformer GGUF：unsloth 仓（ModelScope 主源 + hf-mirror 兜底）
+  #   - 共享组件：Qwen 官方仓 ModelScope 同步镜像（2512 与 2509 共享组件
+  #     SHA256 一致，取 2512 仓；processor 仅 2509 仓有）
+  # size_bytes 为 ModelScope API 实测精确值（完整性校验用）
+  model_files:
+    # ============================================================
+    # transformer（GGUF Q8 单档，t2i/edit 双槽）
+    # ============================================================
+    - id: qwen-t2i-transformer-gguf-q8
+      role: main
+      filename: qwen-image-2512-Q8_0.gguf
+      target_dir: image/qwen-image/transformers/t2i
+      size_bytes: 21761817120
+      precision: q8_0
+      format: gguf
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: unsloth/Qwen-Image-2512-GGUF
+        filename: qwen-image-2512-Q8_0.gguf
+        url: https://www.modelscope.cn/models/unsloth/Qwen-Image-2512-GGUF/resolve/master/qwen-image-2512-Q8_0.gguf
+        mirror_url: https://hf-mirror.com/unsloth/Qwen-Image-2512-GGUF/resolve/main/qwen-image-2512-Q8_0.gguf
+      description: "Qwen-Image-2512 transformer GGUF Q8_0（20.3GB，t2i 槽；QwenImagePipeline 文生图，中文字符渲染强项）"
+
+    - id: qwen-edit-transformer-gguf-q8
+      role: main
+      filename: qwen-image-edit-2509-Q8_0.gguf
+      target_dir: image/qwen-image/transformers/edit
+      size_bytes: 21761817120
+      precision: q8_0
+      format: gguf
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: unsloth/Qwen-Image-Edit-2509-GGUF
+        filename: qwen-image-edit-2509-Q8_0.gguf
+        url: https://www.modelscope.cn/models/unsloth/Qwen-Image-Edit-2509-GGUF/resolve/master/qwen-image-edit-2509-Q8_0.gguf
+        mirror_url: https://hf-mirror.com/unsloth/Qwen-Image-Edit-2509-GGUF/resolve/main/qwen-image-edit-2509-Q8_0.gguf
+      description: "Qwen-Image-Edit-2509 transformer GGUF Q8_0（20.3GB，edit/i2i 槽；EditPlus 管线指令编辑+原生多图参考）"
+
+    # ============================================================
+    # 共享组件：Qwen2.5-VL-7B 文本/视觉编码器（bf16 4 shards + 配置，
+    # 取 Qwen/Qwen-Image-2512 仓 text_encoder/）
+    # ============================================================
+    - id: qwen-text-encoder-shard1
+      role: text_encoder
+      filename: model-00001-of-00004.safetensors
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 4968243304
+      precision: bf16
+      format: safetensors
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/model-00001-of-00004.safetensors
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/model-00001-of-00004.safetensors
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/model-00001-of-00004.safetensors
+      description: "Qwen2.5-VL-7B 编码器权重 shard 1/4（4.6GB，bf16；t2i 与 edit 管线共享）"
+
+    - id: qwen-text-encoder-shard2
+      role: text_encoder
+      filename: model-00002-of-00004.safetensors
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 4991495816
+      precision: bf16
+      format: safetensors
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/model-00002-of-00004.safetensors
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/model-00002-of-00004.safetensors
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/model-00002-of-00004.safetensors
+      description: "Qwen2.5-VL-7B 编码器权重 shard 2/4（4.7GB，bf16）"
+
+    - id: qwen-text-encoder-shard3
+      role: text_encoder
+      filename: model-00003-of-00004.safetensors
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 4932751040
+      precision: bf16
+      format: safetensors
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/model-00003-of-00004.safetensors
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/model-00003-of-00004.safetensors
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/model-00003-of-00004.safetensors
+      description: "Qwen2.5-VL-7B 编码器权重 shard 3/4（4.6GB，bf16）"
+
+    - id: qwen-text-encoder-shard4
+      role: text_encoder
+      filename: model-00004-of-00004.safetensors
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 1691924384
+      precision: bf16
+      format: safetensors
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/model-00004-of-00004.safetensors
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/model-00004-of-00004.safetensors
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/model-00004-of-00004.safetensors
+      description: "Qwen2.5-VL-7B 编码器权重 shard 4/4（1.6GB，bf16）"
+
+    - id: qwen-text-encoder-config
+      role: config
+      filename: config.json
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 3146
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/config.json
+      description: "Qwen2.5-VL 编码器配置（Qwen2_5_VLForConditionalGeneration）"
+
+    - id: qwen-text-encoder-index
+      role: config
+      filename: model.safetensors.index.json
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 57655
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/model.safetensors.index.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/model.safetensors.index.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/model.safetensors.index.json
+      description: "Qwen2.5-VL 编码器 shard 索引（4 shards）"
+
+    - id: qwen-text-encoder-generation-config
+      role: config
+      filename: generation_config.json
+      target_dir: image/qwen-image/text_encoder
+      size_bytes: 244
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: text_encoder/generation_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/text_encoder/generation_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/text_encoder/generation_config.json
+      description: "Qwen2.5-VL 编码器生成配置"
+
+    # ============================================================
+    # 共享组件：VAE（AutoencoderKLQwenImage，取 2512 仓 vae/）
+    # ============================================================
+    - id: qwen-vae-weights
+      role: vae
+      filename: diffusion_pytorch_model.safetensors
+      target_dir: image/qwen-image/vae
+      size_bytes: 253806966
+      precision: bf16
+      format: safetensors
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: vae/diffusion_pytorch_model.safetensors
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/vae/diffusion_pytorch_model.safetensors
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/vae/diffusion_pytorch_model.safetensors
+      description: "QwenImage VAE 权重（254MB；latents_mean/std 由 config 应用）"
+
+    - id: qwen-vae-config
+      role: config
+      filename: config.json
+      target_dir: image/qwen-image/vae
+      size_bytes: 730
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: vae/config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/vae/config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/vae/config.json
+      description: "QwenImage VAE 配置（AutoencoderKLQwenImage）"
+
+    # ============================================================
+    # 共享组件：tokenizer（Qwen2Tokenizer，t2i 管线，取 2512 仓 tokenizer/）
+    # 注：小配置文件不填 format 字段（format=json 会被 ModelFileChecker 过滤）
+    # ============================================================
+    - id: qwen-tokenizer-vocab
+      role: tokenizer
+      filename: vocab.json
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 3383407
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/vocab.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/vocab.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/vocab.json
+      description: "Qwen2Tokenizer 词表（~3.4MB，t2i 管线）"
+
+    - id: qwen-tokenizer-merges
+      role: tokenizer
+      filename: merges.txt
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 1671853
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/merges.txt
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/merges.txt
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/merges.txt
+      description: "Qwen2Tokenizer BPE 合并表（~1.7MB）"
+
+    - id: qwen-tokenizer-config
+      role: tokenizer
+      filename: tokenizer_config.json
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 4686
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/tokenizer_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/tokenizer_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/tokenizer_config.json
+      description: "Qwen2Tokenizer 配置"
+
+    - id: qwen-tokenizer-special
+      role: tokenizer
+      filename: special_tokens_map.json
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 613
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/special_tokens_map.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/special_tokens_map.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/special_tokens_map.json
+      description: "Qwen2Tokenizer 特殊 token 映射"
+
+    - id: qwen-tokenizer-added
+      role: tokenizer
+      filename: added_tokens.json
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 605
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/added_tokens.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/added_tokens.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/added_tokens.json
+      description: "Qwen2Tokenizer 追加 token"
+
+    - id: qwen-tokenizer-chat-template
+      role: tokenizer
+      filename: chat_template.jinja
+      target_dir: image/qwen-image/tokenizers
+      size_bytes: 2427
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: tokenizer/chat_template.jinja
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/tokenizer/chat_template.jinja
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/tokenizer/chat_template.jinja
+      description: "Qwen2Tokenizer chat 模板（系统/用户/助手角色 + 图像 token 标记）"
+
+    # ============================================================
+    # 共享组件：processor（Qwen2VLProcessor，EditPlus 管线，
+    # 取 2509 仓 processor/——2512 仓无此目录）
+    # ============================================================
+    - id: qwen-processor-preprocessor-config
+      role: tokenizer
+      filename: preprocessor_config.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 788
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/preprocessor_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/preprocessor_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/preprocessor_config.json
+      description: "Qwen2VLProcessor 图像预处理配置（EditPlus 管线）"
+
+    - id: qwen-processor-video-config
+      role: tokenizer
+      filename: video_preprocessor_config.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 904
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/video_preprocessor_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/video_preprocessor_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/video_preprocessor_config.json
+      description: "Qwen2VLProcessor 视频预处理配置"
+
+    - id: qwen-processor-tokenizer-json
+      role: tokenizer
+      filename: tokenizer.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 11421896
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/tokenizer.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/tokenizer.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/tokenizer.json
+      description: "Qwen2VLProcessor 快速 tokenizer（11.4MB，EditPlus 管线必需）"
+
+    - id: qwen-processor-chat-template
+      role: tokenizer
+      filename: chat_template.jinja
+      target_dir: image/qwen-image/processor
+      size_bytes: 1017
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/chat_template.jinja
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/chat_template.jinja
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/chat_template.jinja
+      description: "Qwen2VLProcessor chat 模板（多图 Picture 1/2/3 标记）"
+
+    - id: qwen-processor-added
+      role: tokenizer
+      filename: added_tokens.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 605
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/added_tokens.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/added_tokens.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/added_tokens.json
+      description: "Qwen2VLProcessor 追加 token"
+
+    - id: qwen-processor-merges
+      role: tokenizer
+      filename: merges.txt
+      target_dir: image/qwen-image/processor
+      size_bytes: 1671853
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/merges.txt
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/merges.txt
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/merges.txt
+      description: "Qwen2VLProcessor BPE 合并表"
+
+    - id: qwen-processor-special
+      role: tokenizer
+      filename: special_tokens_map.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 613
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/special_tokens_map.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/special_tokens_map.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/special_tokens_map.json
+      description: "Qwen2VLProcessor 特殊 token 映射"
+
+    - id: qwen-processor-config
+      role: tokenizer
+      filename: tokenizer_config.json
+      target_dir: image/qwen-image/processor
+      size_bytes: 4727
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-Edit-2509
+        filename: processor/tokenizer_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-Edit-2509/resolve/master/processor/tokenizer_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-Edit-2509/resolve/main/processor/tokenizer_config.json
+      description: "Qwen2VLProcessor tokenizer 配置（EditPlus 管线必需）"
+
+    # ============================================================
+    # 共享组件：scheduler（FlowMatchEulerDiscreteScheduler，
+    # Qwen 专用 shift 参数 base 0.5 / max 0.9 / terminal 0.02）
+    # ============================================================
+    - id: qwen-scheduler-config
+      role: config
+      filename: scheduler_config.json
+      target_dir: image/qwen-image/scheduler
+      size_bytes: 485
+      required_for: [Qwen/Image-GGUF-Q8]
+      source:
+        type: modelscope
+        repo_id: Qwen/Qwen-Image-2512
+        filename: scheduler/scheduler_config.json
+        url: https://www.modelscope.cn/models/Qwen/Qwen-Image-2512/resolve/master/scheduler/scheduler_config.json
+        mirror_url: https://hf-mirror.com/Qwen/Qwen-Image-2512/resolve/main/scheduler/scheduler_config.json
+      description: "FlowMatchEulerDiscreteScheduler 配置（Qwen 专用 shift 参数）"
+
+  # ===== LoRA 扫描配置 =====
+  loras:
+    scan_dir: image/qwen-image/loras/
+    format: safetensors
+    runtime_switch: true
