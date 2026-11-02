@@ -41,7 +41,7 @@
 # ===== v0.1 必需字段 =====
 engine_id: qwen_image_5e8f3a21
 engine_name: QwenImage
-engine_version: 0.2.0
+engine_version: 1.0.0
 aireliable_compat: ">=0.0.16"
 uv_env_name: image-qwen-image
 export_mode: source
@@ -94,8 +94,8 @@ source:
 
 # 升级信息
 upgrade:
-  check_url: https://api.github.com/repos/QwenLM/Qwen-Image/releases/latest
-  auto_check: false
+  check_url: https://api.github.com/repos/AIJianGe/aireliable-engine-qwen-image/releases/latest
+  auto_check: true
 
 # 节点包依赖（integrated 范式不依赖节点包）
 node_packages: []
