@@ -1,0 +1,45 @@
+# 开源引擎中心展示元数据（任务 80 / T4.1）
+schema: 1
+engine_id: qwen_image_5e8f3a21
+
+name:
+  zh: "Qwen-Image 图像编辑"
+  en: "QwenImage"
+
+description:
+  zh: "Qwen-Image 图像引擎：文生图 + 指令式图像编辑 + 多图参考图生图，GGUF Q8 单档，中文渲染出色。"
+  en: "Qwen-Image engine combining text-to-image, instruction-based editing and multi-reference image-to-image, GGUF Q8, strong Chinese rendering."
+
+category: image
+tags:
+  - text-to-image
+  - image-edit
+  - multi-reference
+
+repository:
+  github: AIJianGe/aireliable-engine-qwen-image
+  gitee: AIJianGe/aireliable-engine-qwen-image
+
+cover: catalog/covers/qwen_image_5e8f3a21.webp
+
+requirements:
+  min_vram_gb: 24
+  python: ">=3.10,<3.13"
+  torch: ">=2.5.0"
+  gpu: required
+
+license: PolyForm-Noncommercial-1.0.0
+
+description_long:
+  zh: |-
+    Qwen-Image 覆盖三类高频图像任务：文生图、按自然语言指令编辑已有图像、以及基于多张参考图的图生图。指令编辑可以直接说“把背景换成海边”“去掉左侧路人”，无需蒙版与局部重绘工具。
+
+    中文提示词理解与中文字形渲染是它的强项，海报、封面、电商主图等含大量中文文案的场景表现稳定，减少后期补字。
+
+    当前目录提供 GGUF Q8 单档精度，推荐 24GB 显存；显存不足时平台会按设备策略降级，但分辨率与并发需要相应调低。
+  en: |-
+    Qwen-Image covers three high-frequency image tasks: text-to-image, instruction-based editing of an existing image, and image-to-image with multiple references. Instruction editing handles requests such as "swap the background for a beach" or "remove the passer-by on the left" without masks or inpainting tools.
+
+    Its strengths are Chinese prompt understanding and Chinese glyph rendering, which keeps posters, covers and e-commerce hero images with dense Chinese copy stable and reduces post-production text fixes.
+
+    The catalog ships a single GGUF Q8 tier and recommends 24GB of VRAM; when memory is tight the platform applies its device policy, but resolution and concurrency must be reduced accordingly.

@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from aireliable_engine import EngineConfig as BaseEngineConfig
+
 
 # ===== 常量 =====
 
@@ -53,45 +55,24 @@ MODEL_SUBDIR = _resolve_model_subdir()
 
 
 @dataclass
-class EngineConfig:
+class EngineConfig(BaseEngineConfig):
     """Qwen-Image 图像引擎运行配置。
 
     通过环境变量 + 命令行参数构造。
     """
 
-    # ===== 基础 =====
+    # ===== 基础（身份 / 端口默认值由本引擎覆盖，其余公共字段见基类）=====
     engine_id: str = ENGINE_ID
     engine_name: str = ENGINE_NAME
     capability: str = CAPABILITY
     engine_type: str = ENGINE_TYPE
     port: int = DEFAULT_PORT
-    host: str = "127.0.0.1"
-
-    # ===== 路径 =====
-    models_root: Path = Path("models")
-    data_root: Path = Path("data")
-    project_root: Path = Path(".")
-    # v0.2.5+ 输出文件根目录统一为 output（项目顶层目录）
-    # 规范：{project_root}/output/{category}/{filename}
-    output_root: Path = Path("output")
 
     # ===== 推导路径 =====
     model_dir: Path = field(init=False)
     lora_dir: Path = field(init=False)
     log_dir: Path = field(init=False)
     input_dir: Path = field(init=False)
-
-    # ===== 设备 =====
-    # auto: 自动检测 GPU / cpu: 强制 CPU / cuda:0: 指定 GPU
-    device: str = "auto"
-
-    # ===== 设备策略（v0.3.5+）=====
-    # auto / gpu / gpu+cpu / cpu，见 DEVICE_POLICIES 注释。
-    # 平台通过 AIRELIABLE_DEVICE_POLICY 环境变量注入（UI 设置 > yaml > 默认 auto）。
-    device_policy: str = "auto"
-
-    # ===== 日志 =====
-    log_level: str = "INFO"
 
     def __post_init__(self) -> None:
         """推导子路径。"""
